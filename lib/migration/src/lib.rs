@@ -174,6 +174,7 @@ pub struct MigrationInfo {
     pub version: u32,
     pub name: String,
     pub status: MigrationStatus,
+    #[serde(with = "clickhouse::serde::chrono::datetime")]
     pub applied_at: chrono::DateTime<chrono::Utc>,
 
     #[serde(skip)]
@@ -222,17 +223,28 @@ impl Migrator {
     async fn execute_migration(&self, info: &MigrationInfo, is_up: bool) -> Result<(), Error> {
         let raw = tokio::fs::read(&info.file_path(is_up)).await?;
         let content = String::from_utf8_lossy(&raw).to_string();
-        let queries = content
+
+        // Process content: remove full-line comments, then split by semicolon
+        let queries: Vec<String> = content
             .split(';')
-            .map(|s| s.trim())
-            .filter(|s| {
-                !s.is_empty()
-                    && !s.starts_with("--")
-                    && !s.chars().all(|c| c.is_whitespace() || c == '\n')
+            .map(|stmt| {
+                // For each statement, filter out comment-only lines but keep inline comments
+                // (ClickHouse handles inline comments fine)
+                stmt.lines()
+                    .filter(|line| {
+                        let trimmed = line.trim();
+                        // Keep non-empty lines that don't start with --
+                        !trimmed.is_empty() && !trimmed.starts_with("--")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
             })
-            .collect::<Vec<&str>>();
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
         for query in queries {
-            self.inner.query(query).execute().await.inspect_err(|err| {
+            self.inner.query(&query).execute().await.inspect_err(|err| {
                 tracing::debug!(error=?err,%query, version=info.full_version(), "Failed to execute query");
             })?;
         }
@@ -247,12 +259,12 @@ impl Migration for Migrator {
             .query(
                 "
             CREATE TABLE IF NOT EXISTS _ch_migrations (
-                version Uint32,
+                version UInt32,
                 name String,
                 status Enum('pending' = 1, 'applied' = 2),
                 applied_at DateTime DEFAULT now()
                 ) ENGINE = MergeTree()
-            ORDER BY(applied_at, version);
+            ORDER BY(applied_at, version)
             ",
             )
             .execute()
@@ -374,7 +386,7 @@ impl Migration for Migrator {
 
         let mut cursor = self
             .inner
-            .query("SELECT version, name, status, applied_at FROM _ch_migrations;")
+            .query("SELECT version, name, status, applied_at FROM _ch_migrations")
             .fetch::<MigrationInfo>()?;
 
         while let Some(info) = cursor.next().await? {

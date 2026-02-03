@@ -24,3 +24,4 @@ serde_repr = { workspace = true }
 [dev-dependencies]
 tempfile = "3"
 clickhouse = { workspace = true, features = ["chrono", "inserter", "test-util"] }
+serial_test = { workspace = true }

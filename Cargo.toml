@@ -19,3 +19,4 @@ async-trait = { version = "0.1" }
 thiserror = "2"
 chrono = { version = "0.4" }
 serde_repr = "0.1"
+serial_test = "3"

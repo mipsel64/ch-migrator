@@ -209,6 +209,16 @@ pub struct Migrator {
 }
 
 impl Migrator {
+    /// Create a new Migrator from a clickhouse Client.
+    /// This is useful for testing with mock clients.
+    pub fn from_client(client: clickhouse::Client) -> Self {
+        Self {
+            inner: Arc::new(client),
+        }
+    }
+}
+
+impl Migrator {
     async fn execute_migration(&self, info: &MigrationInfo, is_up: bool) -> Result<(), Error> {
         let raw = tokio::fs::read(&info.file_path(is_up)).await?;
         let content = String::from_utf8_lossy(&raw).to_string();
@@ -433,4 +443,839 @@ fn parse_request_options(raw: &str) -> Result<(String, String), String> {
                 raw
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clickhouse::test;
+
+    // ==================== Builder tests ====================
+
+    #[test]
+    fn test_builder_new() {
+        let builder = Builder::new("http://localhost:8123");
+        assert_eq!(builder.url, "http://localhost:8123");
+        assert!(builder.username.is_none());
+        assert!(builder.password.is_none());
+        assert!(builder.database.is_none());
+        assert!(builder.options.is_empty());
+    }
+
+    #[test]
+    fn test_builder_with_url() {
+        let builder = Builder::new("http://old").with_url("http://new");
+        assert_eq!(builder.url, "http://new");
+    }
+
+    #[test]
+    fn test_builder_with_username() {
+        let builder = Builder::new("http://localhost").with_username(Some("admin"));
+        assert_eq!(builder.username, Some("admin".to_string()));
+    }
+
+    #[test]
+    fn test_builder_with_username_none() {
+        let builder = Builder::new("http://localhost").with_username(None::<String>);
+        assert!(builder.username.is_none());
+    }
+
+    #[test]
+    fn test_builder_with_password() {
+        let builder = Builder::new("http://localhost").with_password(Some("secret"));
+        assert_eq!(builder.password, Some("secret".to_string()));
+    }
+
+    #[test]
+    fn test_builder_with_option() {
+        let builder = Builder::new("http://localhost")
+            .with_option("async_insert", "1")
+            .with_option("wait_for_async_insert", "0");
+        assert_eq!(builder.options.get("async_insert"), Some(&"1".to_string()));
+        assert_eq!(
+            builder.options.get("wait_for_async_insert"),
+            Some(&"0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_builder_with_options() {
+        let mut opts = HashMap::new();
+        opts.insert("key1".to_string(), "value1".to_string());
+        opts.insert("key2".to_string(), "value2".to_string());
+
+        let builder = Builder::new("http://localhost").with_options(opts);
+        assert_eq!(builder.options.len(), 2);
+    }
+
+    #[test]
+    fn test_builder_to_migrator_success() {
+        let result = Builder::new("http://localhost:8123").to_migrator();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_builder_to_migrator_empty_url_error() {
+        let result = Builder::new("").to_migrator();
+        let Err(err) = result else {
+            panic!("Expect error but got none");
+        };
+        assert!(matches!(err, Error::EmptyUrl));
+    }
+
+    #[test]
+    fn test_builder_chaining() {
+        let migrator = Builder::new("http://localhost:8123")
+            .with_username(Some("user"))
+            .with_password(Some("pass"))
+            .with_option("async_insert", "1")
+            .to_migrator();
+        assert!(migrator.is_ok());
+    }
+
+    // ==================== parse_request_options tests ====================
+
+    #[test]
+    fn test_parse_request_options_valid() {
+        let result = parse_request_options("async_insert=1");
+        assert!(result.is_ok());
+        let (key, value) = result.unwrap();
+        assert_eq!(key, "async_insert");
+        assert_eq!(value, "1");
+    }
+
+    #[test]
+    fn test_parse_request_options_with_equals_in_value() {
+        let result = parse_request_options("key=value=with=equals");
+        assert!(result.is_ok());
+        let (key, value) = result.unwrap();
+        assert_eq!(key, "key");
+        assert_eq!(value, "value=with=equals");
+    }
+
+    #[test]
+    fn test_parse_request_options_no_equals() {
+        let result = parse_request_options("invalid");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_request_options_empty_key() {
+        let result = parse_request_options("=value");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_request_options_empty_value() {
+        let result = parse_request_options("key=");
+        assert!(result.is_err());
+    }
+
+    // ==================== MigrationStatus tests ====================
+
+    #[test]
+    fn test_migration_status_display() {
+        assert_eq!(format!("{}", MigrationStatus::Pending), "Pending");
+        assert_eq!(format!("{}", MigrationStatus::Applied), "Applied");
+    }
+
+    #[test]
+    fn test_migration_status_values() {
+        assert_eq!(MigrationStatus::Pending as i8, 1);
+        assert_eq!(MigrationStatus::Applied as i8, 2);
+    }
+
+    // ==================== MigrationInfo tests ====================
+
+    #[test]
+    fn test_migration_info_full_version() {
+        let info = MigrationInfo {
+            version: 1,
+            name: "create_users".to_string(),
+            status: MigrationStatus::Pending,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Simple,
+            src: "migrations".to_string(),
+        };
+        assert_eq!(info.full_version(), "0001_create_users");
+    }
+
+    #[test]
+    fn test_migration_info_full_version_large_number() {
+        let info = MigrationInfo {
+            version: 12345,
+            name: "test".to_string(),
+            status: MigrationStatus::Pending,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Simple,
+            src: "migrations".to_string(),
+        };
+        assert_eq!(info.full_version(), "12345_test");
+    }
+
+    #[test]
+    fn test_migration_info_file_path_simple() {
+        let info = MigrationInfo {
+            version: 1,
+            name: "create_users".to_string(),
+            status: MigrationStatus::Pending,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Simple,
+            src: "migrations".to_string(),
+        };
+        // Simple mode ignores is_up
+        assert_eq!(info.file_path(true), "migrations/0001_create_users.sql");
+        assert_eq!(info.file_path(false), "migrations/0001_create_users.sql");
+    }
+
+    #[test]
+    fn test_migration_info_file_path_reversible() {
+        let info = MigrationInfo {
+            version: 1,
+            name: "create_users".to_string(),
+            status: MigrationStatus::Pending,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Reversible,
+            src: "migrations".to_string(),
+        };
+        assert_eq!(info.file_path(true), "migrations/0001_create_users.up.sql");
+        assert_eq!(
+            info.file_path(false),
+            "migrations/0001_create_users.down.sql"
+        );
+    }
+
+    // ==================== MigrationFile to MigrationInfo conversion ====================
+
+    #[test]
+    fn test_migration_file_to_info_conversion() {
+        let file = MigrationFile {
+            path: "migrations/0001_create_users.sql".to_string(),
+            name: "create_users".to_string(),
+            mode: MigrationFileMode::Simple,
+            src: "migrations".to_string(),
+            is_up: false,
+            seq_num: 1,
+        };
+
+        let info: MigrationInfo = file.into();
+        assert_eq!(info.version, 1);
+        assert_eq!(info.name, "create_users");
+        assert_eq!(info.status, MigrationStatus::Pending);
+        assert_eq!(info.mode, MigrationFileMode::Simple);
+        assert_eq!(info.src, "migrations");
+    }
+
+    // ==================== Migrator with mock tests ====================
+
+    fn create_mock_migrator(mock: &test::Mock) -> Migrator {
+        let client = clickhouse::Client::default().with_url(mock.url());
+        Migrator::from_client(client)
+    }
+
+    #[tokio::test]
+    async fn test_ping_success() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        mock.add(test::handlers::record_ddl());
+
+        let result = migrator.ping().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ping_failure() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        mock.add(test::handlers::failure(test::status::INTERNAL_SERVER_ERROR));
+
+        let result = migrator.ping().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_migrations_table() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let recording = mock.add(test::handlers::record_ddl());
+
+        let result = migrator.ensure_migrations_table().await;
+        assert!(result.is_ok());
+
+        let query = recording.query().await;
+        assert!(query.contains("CREATE TABLE IF NOT EXISTS _ch_migrations"));
+    }
+
+    #[tokio::test]
+    async fn test_info_with_local_migrations_only() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // Create local migration files
+        tokio::fs::write(
+            format!("{}/0001_create_users.sql", src),
+            b"CREATE TABLE users",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            format!("{}/0002_create_posts.sql", src),
+            b"CREATE TABLE posts",
+        )
+        .await
+        .unwrap();
+
+        // Mock empty response from database (no applied migrations)
+        mock.add(test::handlers::provide::<MigrationInfo>(vec![]));
+
+        let result = migrator.info(src, false).await;
+        assert!(result.is_ok());
+
+        let migrations = result.unwrap();
+        assert_eq!(migrations.len(), 2);
+        assert_eq!(migrations[0].version, 1);
+        assert_eq!(migrations[0].status, MigrationStatus::Pending);
+        assert_eq!(migrations[1].version, 2);
+        assert_eq!(migrations[1].status, MigrationStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_info_with_applied_migrations() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // Create local migration files
+        tokio::fs::write(
+            format!("{}/0001_create_users.sql", src),
+            b"CREATE TABLE users",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            format!("{}/0002_create_posts.sql", src),
+            b"CREATE TABLE posts",
+        )
+        .await
+        .unwrap();
+
+        // Mock response with first migration applied
+        let applied = vec![MigrationInfo {
+            version: 1,
+            name: "create_users".to_string(),
+            status: MigrationStatus::Applied,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Simple,
+            src: String::new(),
+        }];
+        mock.add(test::handlers::provide(applied));
+
+        let result = migrator.info(src, false).await;
+        assert!(result.is_ok());
+
+        let migrations = result.unwrap();
+        assert_eq!(migrations.len(), 2);
+        assert_eq!(migrations[0].status, MigrationStatus::Applied);
+        assert_eq!(migrations[1].status, MigrationStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_info_migration_name_mismatch_error() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // Create local migration file
+        tokio::fs::write(
+            format!("{}/0001_create_users.sql", src),
+            b"CREATE TABLE users",
+        )
+        .await
+        .unwrap();
+
+        // Mock response with different name for same version
+        let applied = vec![MigrationInfo {
+            version: 1,
+            name: "different_name".to_string(), // Mismatch!
+            status: MigrationStatus::Applied,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Simple,
+            src: String::new(),
+        }];
+        mock.add(test::handlers::provide(applied));
+
+        let result = migrator.info(src, false).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::MigrationCorrupted(_)));
+    }
+
+    #[tokio::test]
+    async fn test_info_missing_local_migration_error() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // No local files, but db has applied migration
+        let applied = vec![MigrationInfo {
+            version: 1,
+            name: "create_users".to_string(),
+            status: MigrationStatus::Applied,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Simple,
+            src: String::new(),
+        }];
+        mock.add(test::handlers::provide(applied));
+
+        let result = migrator.info(src, false).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::MigrationCorrupted(_)));
+    }
+
+    #[tokio::test]
+    async fn test_info_missing_local_migration_ignored() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // No local files, but db has applied migration
+        let applied = vec![MigrationInfo {
+            version: 1,
+            name: "create_users".to_string(),
+            status: MigrationStatus::Applied,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Simple,
+            src: String::new(),
+        }];
+        mock.add(test::handlers::provide(applied));
+
+        // With ignore_missing = true
+        let result = migrator.info(src, true).await;
+        assert!(result.is_ok());
+        // Migration is ignored, so empty result
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_dry_run_returns_pending() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        tokio::fs::write(
+            format!("{}/0001_create_users.sql", src),
+            b"CREATE TABLE users",
+        )
+        .await
+        .unwrap();
+
+        mock.add(test::handlers::provide::<MigrationInfo>(vec![]));
+
+        let result = migrator.run(src, true, false, None).await;
+        assert!(result.is_ok());
+
+        let pending = result.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].version, 1);
+        // Status should still be Pending in dry_run
+        assert_eq!(pending[0].status, MigrationStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_run_no_pending_migrations() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        tokio::fs::write(
+            format!("{}/0001_create_users.sql", src),
+            b"CREATE TABLE users",
+        )
+        .await
+        .unwrap();
+
+        // All migrations already applied
+        let applied = vec![MigrationInfo {
+            version: 1,
+            name: "create_users".to_string(),
+            status: MigrationStatus::Applied,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Simple,
+            src: String::new(),
+        }];
+        mock.add(test::handlers::provide(applied));
+
+        let result = migrator.run(src, false, false, None).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_target_version() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        tokio::fs::write(format!("{}/0001_first.sql", src), b"SELECT 1")
+            .await
+            .unwrap();
+        tokio::fs::write(format!("{}/0002_second.sql", src), b"SELECT 2")
+            .await
+            .unwrap();
+        tokio::fs::write(format!("{}/0003_third.sql", src), b"SELECT 3")
+            .await
+            .unwrap();
+
+        mock.add(test::handlers::provide::<MigrationInfo>(vec![]));
+
+        // Only run up to version 2
+        let result = migrator.run(src, true, false, Some(2)).await;
+        assert!(result.is_ok());
+
+        let pending = result.unwrap();
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().all(|m| m.version <= 2));
+    }
+
+    #[tokio::test]
+    async fn test_run_out_of_order_error() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // Create migrations with a gap
+        tokio::fs::write(format!("{}/0001_first.sql", src), b"SELECT 1")
+            .await
+            .unwrap();
+        tokio::fs::write(format!("{}/0002_second.sql", src), b"SELECT 2")
+            .await
+            .unwrap();
+        tokio::fs::write(format!("{}/0003_third.sql", src), b"SELECT 3")
+            .await
+            .unwrap();
+
+        // Version 3 is applied but version 2 is not (out of order)
+        let applied = vec![
+            MigrationInfo {
+                version: 1,
+                name: "first".to_string(),
+                status: MigrationStatus::Applied,
+                applied_at: chrono::Utc::now(),
+                mode: MigrationFileMode::Simple,
+                src: String::new(),
+            },
+            MigrationInfo {
+                version: 3,
+                name: "third".to_string(),
+                status: MigrationStatus::Applied,
+                applied_at: chrono::Utc::now(),
+                mode: MigrationFileMode::Simple,
+                src: String::new(),
+            },
+        ];
+        mock.add(test::handlers::provide(applied));
+
+        let result = migrator.run(src, false, false, None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, Error::MigrationCorrupted(_)));
+        assert!(err.to_string().contains("out of order"));
+    }
+
+    #[tokio::test]
+    async fn test_run_applies_migrations() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        tokio::fs::write(
+            format!("{}/0001_create_users.sql", src),
+            b"CREATE TABLE users (id Int32) ENGINE = Memory",
+        )
+        .await
+        .unwrap();
+
+        // No applied migrations
+        mock.add(test::handlers::provide::<MigrationInfo>(vec![]));
+        // DDL execution
+        mock.add(test::handlers::record_ddl());
+        // Insert recording
+        let insert_recording = mock.add(test::handlers::record());
+
+        let result = migrator.run(src, false, false, None).await;
+        assert!(result.is_ok());
+
+        let applied = result.unwrap();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].status, MigrationStatus::Applied);
+
+        // Verify insert was called
+        let inserted: Vec<MigrationInfo> = insert_recording.collect().await;
+        assert_eq!(inserted.len(), 1);
+        assert_eq!(inserted[0].version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_revert_dry_run() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // Create reversible migration
+        tokio::fs::write(
+            format!("{}/0001_create_users.up.sql", src),
+            b"CREATE TABLE users",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            format!("{}/0001_create_users.down.sql", src),
+            b"DROP TABLE users",
+        )
+        .await
+        .unwrap();
+
+        let applied = vec![MigrationInfo {
+            version: 1,
+            name: "create_users".to_string(),
+            status: MigrationStatus::Applied,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Reversible,
+            src: String::new(),
+        }];
+        mock.add(test::handlers::provide(applied));
+
+        let result = migrator.revert(src, true, false, None).await;
+        assert!(result.is_ok());
+
+        let targets = result.unwrap();
+        assert_eq!(targets.len(), 1);
+        // Still Applied in dry_run mode
+        assert_eq!(targets[0].status, MigrationStatus::Applied);
+    }
+
+    #[tokio::test]
+    async fn test_revert_simple_migration_not_revertable() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // Create simple (non-reversible) migration
+        tokio::fs::write(
+            format!("{}/0001_create_users.sql", src),
+            b"CREATE TABLE users",
+        )
+        .await
+        .unwrap();
+
+        let applied = vec![MigrationInfo {
+            version: 1,
+            name: "create_users".to_string(),
+            status: MigrationStatus::Applied,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Simple,
+            src: String::new(),
+        }];
+        mock.add(test::handlers::provide(applied));
+
+        let result = migrator.revert(src, true, false, None).await;
+        assert!(result.is_ok());
+        // No targets because simple migrations can't be reverted
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_revert_latest_only() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // Create multiple reversible migrations
+        tokio::fs::write(format!("{}/0001_first.up.sql", src), b"SELECT 1")
+            .await
+            .unwrap();
+        tokio::fs::write(format!("{}/0001_first.down.sql", src), b"SELECT 1")
+            .await
+            .unwrap();
+        tokio::fs::write(format!("{}/0002_second.up.sql", src), b"SELECT 2")
+            .await
+            .unwrap();
+        tokio::fs::write(format!("{}/0002_second.down.sql", src), b"SELECT 2")
+            .await
+            .unwrap();
+
+        let applied = vec![
+            MigrationInfo {
+                version: 1,
+                name: "first".to_string(),
+                status: MigrationStatus::Applied,
+                applied_at: chrono::Utc::now(),
+                mode: MigrationFileMode::Reversible,
+                src: String::new(),
+            },
+            MigrationInfo {
+                version: 2,
+                name: "second".to_string(),
+                status: MigrationStatus::Applied,
+                applied_at: chrono::Utc::now(),
+                mode: MigrationFileMode::Reversible,
+                src: String::new(),
+            },
+        ];
+        mock.add(test::handlers::provide(applied));
+
+        // Without target_version, should only revert the latest
+        let result = migrator.revert(src, true, false, None).await;
+        assert!(result.is_ok());
+
+        let targets = result.unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].version, 2); // Latest
+    }
+
+    #[tokio::test]
+    async fn test_revert_with_target_version() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        // Create multiple reversible migrations
+        for i in 1..=4 {
+            tokio::fs::write(format!("{}/{:04}_m{}.up.sql", src, i, i), b"SELECT 1")
+                .await
+                .unwrap();
+            tokio::fs::write(format!("{}/{:04}_m{}.down.sql", src, i, i), b"SELECT 1")
+                .await
+                .unwrap();
+        }
+
+        let applied: Vec<MigrationInfo> = (1..=4)
+            .map(|i| MigrationInfo {
+                version: i,
+                name: format!("m{}", i),
+                status: MigrationStatus::Applied,
+                applied_at: chrono::Utc::now(),
+                mode: MigrationFileMode::Reversible,
+                src: String::new(),
+            })
+            .collect();
+        mock.add(test::handlers::provide(applied));
+
+        // Revert down to version 2 (keep 1 and 2, revert 3 and 4)
+        let result = migrator.revert(src, true, false, Some(2)).await;
+        assert!(result.is_ok());
+
+        let targets = result.unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|m| m.version > 2));
+    }
+
+    #[tokio::test]
+    async fn test_revert_to_zero_reverts_all() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        for i in 1..=3 {
+            tokio::fs::write(format!("{}/{:04}_m{}.up.sql", src, i, i), b"SELECT 1")
+                .await
+                .unwrap();
+            tokio::fs::write(format!("{}/{:04}_m{}.down.sql", src, i, i), b"SELECT 1")
+                .await
+                .unwrap();
+        }
+
+        let applied: Vec<MigrationInfo> = (1..=3)
+            .map(|i| MigrationInfo {
+                version: i,
+                name: format!("m{}", i),
+                status: MigrationStatus::Applied,
+                applied_at: chrono::Utc::now(),
+                mode: MigrationFileMode::Reversible,
+                src: String::new(),
+            })
+            .collect();
+        mock.add(test::handlers::provide(applied));
+
+        // Revert to 0 means revert all
+        let result = migrator.revert(src, true, false, Some(0)).await;
+        assert!(result.is_ok());
+
+        let targets = result.unwrap();
+        assert_eq!(targets.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_revert_executes_down_migration() {
+        let mock = test::Mock::new();
+        let migrator = create_mock_migrator(&mock);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let src = temp_dir.path().to_str().unwrap();
+
+        tokio::fs::write(format!("{}/0001_test.up.sql", src), b"CREATE TABLE test")
+            .await
+            .unwrap();
+        tokio::fs::write(format!("{}/0001_test.down.sql", src), b"DROP TABLE test")
+            .await
+            .unwrap();
+
+        let applied = vec![MigrationInfo {
+            version: 1,
+            name: "test".to_string(),
+            status: MigrationStatus::Applied,
+            applied_at: chrono::Utc::now(),
+            mode: MigrationFileMode::Reversible,
+            src: String::new(),
+        }];
+        mock.add(test::handlers::provide(applied));
+
+        // DDL for down migration
+        let ddl_recording = mock.add(test::handlers::record_ddl());
+        // DELETE query
+        mock.add(test::handlers::record_ddl());
+
+        let result = migrator.revert(src, false, false, None).await;
+        assert!(result.is_ok());
+
+        let reverted = result.unwrap();
+        assert_eq!(reverted.len(), 1);
+        assert_eq!(reverted[0].status, MigrationStatus::Pending);
+
+        let query = ddl_recording.query().await;
+        assert!(query.contains("DROP TABLE test"));
+    }
 }

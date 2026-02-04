@@ -53,14 +53,14 @@ WORKDIR /app
 
 COPY --from=planner /app/recipe.json recipe.json
 
-RUN --mount=type=cache,target=$CARGO_HOME/registry \
-  --mount=type=cache,target=$CARGO_HOME/git \
+RUN --mount=type=cache,id=cargo-registry,target=$CARGO_HOME/registry,sharing=locked \
+  --mount=type=cache,id=cargo-git,target=$CARGO_HOME/git,sharing=locked \
   cargo chef cook --release --target $(cat rust_target.txt) --recipe-path recipe.json
 
 COPY . .
 
-RUN --mount=type=cache,target=$CARGO_HOME/registry \
-  --mount=type=cache,target=$CARGO_HOME/git \
+RUN --mount=type=cache,id=cargo-registry,target=$CARGO_HOME/registry,sharing=locked \
+  --mount=type=cache,id=cargo-git,target=$CARGO_HOME/git,sharing=locked \
   cargo build --bin cli --target $(cat rust_target.txt) --release && \
   mkdir -p /tmp/out && \
   cp target/$(cat rust_target.txt)/release/cli /tmp/out/ch-migrator

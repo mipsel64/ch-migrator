@@ -130,6 +130,8 @@ async fn run() -> eyre::Result<()> {
         .await
         .wrap_err_with(|| "Failed to ping ClickHouse")?;
 
+    migrator.ensure_migrations_table().await?;
+
     match command {
         Commands::Up {
             dry_run,

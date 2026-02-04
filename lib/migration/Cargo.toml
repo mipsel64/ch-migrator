@@ -5,8 +5,7 @@ edition.workspace = true
 
 [features]
 default = ["rustls-tls"] 
-rustls-tls = ["clickhouse/rustls-tls"]
-rustls-tls-ring = ["clickhouse/rustls-tls-ring"]
+rustls-tls = ["clickhouse/rustls-tls-ring", "clickhouse/rustls-tls-webpki-roots"]
 native-tls = ["clickhouse/native-tls"]
 clap = ["dep:clap"]
 

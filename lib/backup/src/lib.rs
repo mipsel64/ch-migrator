@@ -179,11 +179,25 @@ impl Restore for Client {
 
         let target_db = target_db.unwrap_or_else(|| source_db.clone());
 
-        if tables.is_empty() {
-            return Err(Error::InvalidInput(
-                "At least one table must be specified for restore".to_string(),
-            ));
-        }
+        // If no tables specified, discover all tables in the backup
+        let tables = if tables.is_empty() {
+            let discovered = restore_from
+                .list_tables(&self.inner, &source_db)
+                .await?;
+            if discovered.is_empty() {
+                return Err(Error::InvalidInput(
+                    "No tables found in the backup source".to_string(),
+                ));
+            }
+            tracing::info!(
+                "Auto-discovered {} table(s) in backup: {:?}",
+                discovered.len(),
+                discovered
+            );
+            discovered
+        } else {
+            tables
+        };
 
         tracing::info!(
             "Restoring {} table(s) into database '{}' from source '{}'",
@@ -622,6 +636,99 @@ impl StoreMethod {
             }
 
             _ => None,
+        }
+    }
+
+    /// Discover table names present in a backup by scanning metadata files.
+    ///
+    /// ClickHouse backup layout (per-table, as written by `backup()`):
+    ///   `{base}/{db}/{table}/metadata/{db}/{table}.sql`
+    ///
+    /// We glob across all per-table subdirectories and extract the table
+    /// name from the `.sql` filename.
+    pub async fn list_tables(
+        &self,
+        client: &clickhouse::Client,
+        source_db: &str,
+    ) -> Result<Vec<String>, Error> {
+        let extract_expr = concat!(
+            "replaceRegexpOne(_path, '.*/metadata/[^/]+/([^/]+)\\.sql$', '\\\\1')",
+        );
+
+        match self {
+            StoreMethod::S3 {
+                access_key,
+                secret_key,
+                ..
+            } => {
+                let glob_url = format!(
+                    "{}/{}/*/metadata/{}/*.sql",
+                    self.s3_url().unwrap_or_default().trim_end_matches('/'),
+                    source_db,
+                    source_db,
+                );
+
+                let query_str = format!(
+                    "SELECT DISTINCT {} AS table_name FROM s3(?, ?, ?, 'One') ORDER BY table_name",
+                    extract_expr,
+                );
+
+                let tables: Vec<String> = client
+                    .query(&query_str)
+                    .bind(&glob_url)
+                    .bind(access_key)
+                    .bind(secret_key)
+                    .fetch_all()
+                    .await
+                    .map_err(Error::ClickhouseError)?;
+
+                Ok(tables)
+            }
+            StoreMethod::Disk { name, path } => {
+                let glob_path = format!(
+                    "{}/{}/*/metadata/{}/*.sql",
+                    path.trim_end_matches('/'),
+                    source_db,
+                    source_db,
+                );
+
+                let query_str = format!(
+                    "SELECT DISTINCT {} AS table_name FROM disk(?, ?, 'One') ORDER BY table_name",
+                    extract_expr,
+                );
+
+                let tables: Vec<String> = client
+                    .query(&query_str)
+                    .bind(name)
+                    .bind(&glob_path)
+                    .fetch_all()
+                    .await
+                    .map_err(Error::ClickhouseError)?;
+
+                Ok(tables)
+            }
+            StoreMethod::File(path) => {
+                let glob_path = format!(
+                    "{}/{}/*/metadata/{}/*.sql",
+                    path.trim_end_matches('/'),
+                    source_db,
+                    source_db,
+                );
+
+                let query_str = format!(
+                    "SELECT DISTINCT {} AS table_name FROM file(?, 'One') ORDER BY table_name",
+                    extract_expr,
+                );
+
+                let tables: Vec<String> = client
+                    .query(&query_str)
+                    .bind(&glob_path)
+                    .fetch_all()
+                    .await
+                    .map_err(Error::ClickhouseError)?;
+
+                Ok(tables)
+            }
         }
     }
 }

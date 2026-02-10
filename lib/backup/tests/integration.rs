@@ -798,3 +798,296 @@ async fn test_full_backup_restore_workflow() {
         .unwrap();
     assert_eq!(order_count, 3, "Orders table should have 3 rows");
 }
+
+// ==================== Auto-discover Tables Test ====================
+
+#[tokio::test]
+#[serial(clickhouse)]
+async fn test_restore_auto_discover_tables() {
+    let client = require_clickhouse!();
+    let _store = require_s3!("test_restore_auto_discover_tables");
+    let raw = build_raw_client();
+
+    let db = "test_restore_auto_discover_tables";
+    raw.query(&format!("DROP DATABASE IF EXISTS {}", db))
+        .execute()
+        .await
+        .unwrap();
+    raw.query(&format!("CREATE DATABASE {}", db))
+        .execute()
+        .await
+        .unwrap();
+
+    raw.query(&format!(
+        "CREATE TABLE {}.alpha (id UInt32, val String) ENGINE = MergeTree() ORDER BY id",
+        db
+    ))
+    .execute()
+    .await
+    .unwrap();
+
+    raw.query(&format!(
+        "CREATE TABLE {}.beta (id UInt32, score Float64) ENGINE = MergeTree() ORDER BY id",
+        db
+    ))
+    .execute()
+    .await
+    .unwrap();
+
+    raw.query(&format!(
+        "INSERT INTO {}.alpha (id, val) VALUES (1, 'x'), (2, 'y')",
+        db
+    ))
+    .execute()
+    .await
+    .unwrap();
+
+    raw.query(&format!(
+        "INSERT INTO {}.beta (id, score) VALUES (1, 3.14), (2, 2.72)",
+        db
+    ))
+    .execute()
+    .await
+    .unwrap();
+
+    // Backup both tables
+    let store = build_s3_store("test_restore_auto_discover_tables").unwrap();
+    let backup_cfg = BackupConfig::new(store, db)
+        .add_table("alpha")
+        .add_table("beta");
+
+    let backup_ids = client
+        .backup(backup_cfg)
+        .await
+        .expect("Backup should succeed");
+
+    let statuses = wait_for_backup_completion(&client, &backup_ids, Duration::from_secs(30)).await;
+    assert!(
+        statuses
+            .iter()
+            .all(|s| s.status.to_string() == "BACKUP_CREATED"),
+        "All backups should succeed"
+    );
+
+    // Drop both tables
+    raw.query(&format!("DROP TABLE IF EXISTS {}.alpha", db))
+        .execute()
+        .await
+        .unwrap();
+    raw.query(&format!("DROP TABLE IF EXISTS {}.beta", db))
+        .execute()
+        .await
+        .unwrap();
+
+    // Restore WITHOUT specifying tables — should auto-discover both
+    let restore_store = build_s3_store("test_restore_auto_discover_tables").unwrap();
+    let restore_cfg = RestoreConfig::new(restore_store, db).target_db(Some(db));
+    // Note: no .add_table() calls — tables should be auto-discovered
+
+    let restore_ids = client
+        .restore(restore_cfg)
+        .await
+        .expect("Restore with auto-discovery should succeed");
+
+    assert_eq!(
+        restore_ids.len(),
+        2,
+        "Should restore 2 auto-discovered tables"
+    );
+
+    let statuses = wait_for_backup_completion(&client, &restore_ids, Duration::from_secs(30)).await;
+    assert!(
+        statuses.iter().all(|s| s.status.to_string() == "RESTORED"),
+        "All restores should succeed: {:?}",
+        statuses
+            .iter()
+            .map(|s| (&s.status, &s.error))
+            .collect::<Vec<_>>()
+    );
+
+    // Verify data
+    let alpha_count: u64 = raw
+        .query(&format!("SELECT count() FROM {}.alpha", db))
+        .fetch_one()
+        .await
+        .unwrap();
+    assert_eq!(alpha_count, 2, "alpha table should have 2 rows");
+
+    let beta_count: u64 = raw
+        .query(&format!("SELECT count() FROM {}.beta", db))
+        .fetch_one()
+        .await
+        .unwrap();
+    assert_eq!(beta_count, 2, "beta table should have 2 rows");
+}
+
+// ==================== list_tables Tests ====================
+
+#[tokio::test]
+#[serial(clickhouse)]
+async fn test_list_tables_single_table() {
+    let _client = require_clickhouse!();
+    let _store = require_s3!("test_list_tables_single_table");
+    let raw = build_raw_client();
+
+    let db = "test_list_tables_single_table";
+    let table = "events";
+    setup_test_table(&raw, db, table).await;
+
+    // Backup one table
+    let store = build_s3_store("test_list_tables_single_table").unwrap();
+    let backup_cfg = BackupConfig::new(store, db).add_table(table);
+
+    let backup_ids = _client
+        .backup(backup_cfg)
+        .await
+        .expect("Backup should succeed");
+    let statuses = wait_for_backup_completion(&_client, &backup_ids, Duration::from_secs(30)).await;
+    assert!(
+        statuses
+            .iter()
+            .all(|s| s.status.to_string() == "BACKUP_CREATED"),
+    );
+
+    // list_tables should find exactly one table
+    let store = build_s3_store("test_list_tables_single_table").unwrap();
+    let tables = store
+        .list_tables(&raw, db)
+        .await
+        .expect("list_tables should succeed");
+
+    assert_eq!(tables, vec!["events"]);
+}
+
+#[tokio::test]
+#[serial(clickhouse)]
+async fn test_list_tables_multiple_tables() {
+    let _client = require_clickhouse!();
+    let _store = require_s3!("test_list_tables_multiple_tables");
+    let raw = build_raw_client();
+
+    let db = "test_list_tables_multiple_tables";
+    raw.query(&format!("DROP DATABASE IF EXISTS {}", db))
+        .execute()
+        .await
+        .unwrap();
+    raw.query(&format!("CREATE DATABASE {}", db))
+        .execute()
+        .await
+        .unwrap();
+
+    for tbl in &["accounts", "invoices", "payments"] {
+        raw.query(&format!(
+            "CREATE TABLE {}.{} (id UInt32) ENGINE = MergeTree() ORDER BY id",
+            db, tbl
+        ))
+        .execute()
+        .await
+        .unwrap();
+
+        raw.query(&format!("INSERT INTO {}.{} VALUES (1)", db, tbl))
+            .execute()
+            .await
+            .unwrap();
+    }
+
+    // Backup all three tables
+    let store = build_s3_store("test_list_tables_multiple_tables").unwrap();
+    let backup_cfg = BackupConfig::new(store, db)
+        .add_table("accounts")
+        .add_table("invoices")
+        .add_table("payments");
+
+    let backup_ids = _client
+        .backup(backup_cfg)
+        .await
+        .expect("Backup should succeed");
+    let statuses = wait_for_backup_completion(&_client, &backup_ids, Duration::from_secs(30)).await;
+    assert!(
+        statuses
+            .iter()
+            .all(|s| s.status.to_string() == "BACKUP_CREATED"),
+    );
+
+    // list_tables should find all three, sorted alphabetically
+    let store = build_s3_store("test_list_tables_multiple_tables").unwrap();
+    let tables = store
+        .list_tables(&raw, db)
+        .await
+        .expect("list_tables should succeed");
+
+    assert_eq!(tables, vec!["accounts", "invoices", "payments"]);
+}
+
+#[tokio::test]
+#[serial(clickhouse)]
+async fn test_list_tables_empty_when_no_backup_exists() {
+    let _client = require_clickhouse!();
+    let _store = require_s3!("test_list_tables_empty_no_backup");
+    let raw = build_raw_client();
+
+    // Point at a prefix where no backup has ever been written
+    let store = build_s3_store("test_list_tables_empty_no_backup").unwrap();
+    let tables = store
+        .list_tables(&raw, "nonexistent_db_xyz")
+        .await
+        .expect("list_tables should succeed even with no files");
+
+    assert!(
+        tables.is_empty(),
+        "Should return empty when no backup exists at the path, got: {:?}",
+        tables
+    );
+}
+
+#[tokio::test]
+#[serial(clickhouse)]
+async fn test_list_tables_scoped_to_source_db() {
+    let _client = require_clickhouse!();
+    let _store = require_s3!("test_list_tables_scoped_to_source_db");
+    let raw = build_raw_client();
+
+    let db_a = "test_list_tables_scope_a";
+    let db_b = "test_list_tables_scope_b";
+
+    // Set up two databases with different tables
+    setup_test_table(&raw, db_a, "from_a").await;
+    setup_test_table(&raw, db_b, "from_b").await;
+
+    // Backup both under the same S3 prefix
+    let store_a = build_s3_store("test_list_tables_scoped_to_source_db").unwrap();
+    let backup_ids_a = _client
+        .backup(BackupConfig::new(store_a, db_a).add_table("from_a"))
+        .await
+        .expect("Backup A should succeed");
+
+    let store_b = build_s3_store("test_list_tables_scoped_to_source_db").unwrap();
+    let backup_ids_b = _client
+        .backup(BackupConfig::new(store_b, db_b).add_table("from_b"))
+        .await
+        .expect("Backup B should succeed");
+
+    let all_ids: Vec<String> = backup_ids_a.into_iter().chain(backup_ids_b).collect();
+    let statuses = wait_for_backup_completion(&_client, &all_ids, Duration::from_secs(30)).await;
+    assert!(
+        statuses
+            .iter()
+            .all(|s| s.status.to_string() == "BACKUP_CREATED"),
+    );
+
+    // list_tables scoped to db_a should only find "from_a"
+    let store = build_s3_store("test_list_tables_scoped_to_source_db").unwrap();
+    let tables_a = store
+        .list_tables(&raw, db_a)
+        .await
+        .expect("list_tables for db_a should succeed");
+    assert_eq!(tables_a, vec!["from_a"], "Should only see tables from db_a");
+
+    // list_tables scoped to db_b should only find "from_b"
+    let store = build_s3_store("test_list_tables_scoped_to_source_db").unwrap();
+    let tables_b = store
+        .list_tables(&raw, db_b)
+        .await
+        .expect("list_tables for db_b should succeed");
+    assert_eq!(tables_b, vec!["from_b"], "Should only see tables from db_b");
+}

@@ -94,6 +94,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "backup"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "ch",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_repr",
+ "serial_test",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -135,6 +152,17 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "ch"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "clap",
+ "clickhouse",
+ "serde",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "chrono"
@@ -192,8 +220,9 @@ checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
 name = "cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
+ "ch",
  "clap",
  "eyre",
  "migration",
@@ -785,12 +814,12 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
 name = "migration"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
+ "ch",
  "chrono",
  "clap",
- "clickhouse",
  "serde",
  "serde_repr",
  "serial_test",

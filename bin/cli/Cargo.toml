@@ -10,3 +10,4 @@ eyre = { workspace = true }
 tracing = { workspace = true }
 migration = { workspace = true, features = ["clap"] }
 tracing-subscriber = { workspace = true }
+ch = { workspace = true }

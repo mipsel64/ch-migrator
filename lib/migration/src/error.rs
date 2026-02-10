@@ -1,8 +1,5 @@
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("Input Clickhouse URL is empty")]
-    EmptyUrl,
-
     #[error("Migration Corrupted: {0}")]
     MigrationCorrupted(String),
 
@@ -13,5 +10,5 @@ pub enum Error {
     IoError(#[from] std::io::Error),
 
     #[error(transparent)]
-    ClickhouseError(#[from] clickhouse::error::Error),
+    ClickhouseError(#[from] ch::ClickhouseError),
 }

@@ -31,7 +31,7 @@ struct Cli {
     pub database: Option<String>,
 
     /// Additional ClickHouse request options (space-delimited key=value pairs)
-    #[clap(long = "clickhouse-option", env = "CLICKHOUSE_OPTIONS", value_parser = migration::parse_request_options, global = true, value_delimiter = ' ')]
+    #[clap(long = "clickhouse-option", env = "CLICKHOUSE_OPTIONS", value_parser = ch::parse_request_options, global = true, value_delimiter = ' ')]
     pub options: Vec<(String, String)>,
 
     /// Directory path containing migration files
@@ -115,15 +115,17 @@ async fn run() -> eyre::Result<()> {
         eyre::bail!("--clickhouse-url must be specified");
     }
 
-    let builder = migration::Builder::new(url)
+    let builder = ch::Builder::new(url)
         .with_username(username)
         .with_password(password)
         .with_database(database)
         .with_options(options);
 
-    let migrator = builder
-        .to_migrator()
-        .wrap_err_with(|| "Failed to build migrator")?;
+    let ch_client = builder
+        .to_client()
+        .wrap_err_with(|| "Failed to build ClickHouse client")?;
+
+    let migrator = migration::Migrator::from_client(ch_client);
 
     migrator
         .ping()

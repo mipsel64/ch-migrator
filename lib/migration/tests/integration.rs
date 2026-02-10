@@ -1,4 +1,6 @@
-use migration::{Builder, Migration, MigrationFileMode, MigrationStatus};
+use ch::Builder;
+use ch::clickhouse;
+use migration::{Migration, MigrationFileMode, MigrationStatus};
 use serial_test::serial;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -28,7 +30,11 @@ fn build_clickhouse_client() -> Option<migration::Migrator> {
         builder = builder.with_password(Some(password));
     }
 
-    let migrator = builder.to_migrator().expect("Failed to build migrator");
+    let client = builder
+        .to_client()
+        .expect("Failed to build ClickHouse client");
+
+    let migrator = migration::Migrator::from_client(client);
 
     Some(migrator)
 }

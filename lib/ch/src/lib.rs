@@ -164,3 +164,110 @@ pub fn parse_request_options(raw: &str) -> Result<(String, String), String> {
             )
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // ==================== Builder tests ====================
+
+    #[test]
+    fn test_builder_new() {
+        let builder = Builder::new("http://localhost:8123");
+        assert_eq!(builder.url, "http://localhost:8123");
+        assert!(builder.username.is_none());
+        assert!(builder.password.is_none());
+        assert!(builder.database.is_none());
+        assert!(builder.options.is_empty());
+    }
+
+    #[test]
+    fn test_builder_with_url() {
+        let builder = Builder::new("http://old").with_url("http://new");
+        assert_eq!(builder.url, "http://new");
+    }
+
+    #[test]
+    fn test_builder_with_username() {
+        let builder = Builder::new("http://localhost").with_username(Some("admin"));
+        assert_eq!(builder.username, Some("admin".to_string()));
+    }
+
+    #[test]
+    fn test_builder_with_username_none() {
+        let builder = Builder::new("http://localhost").with_username(None::<String>);
+        assert!(builder.username.is_none());
+    }
+
+    #[test]
+    fn test_builder_with_password() {
+        let builder = Builder::new("http://localhost").with_password(Some("secret"));
+        assert_eq!(builder.password, Some("secret".to_string()));
+    }
+
+    #[test]
+    fn test_builder_with_option() {
+        let builder = Builder::new("http://localhost")
+            .with_option("async_insert", "1")
+            .with_option("wait_for_async_insert", "0");
+        assert!(
+            builder
+                .options
+                .iter()
+                .any(|(k, v)| k == "async_insert" && v == "1")
+        );
+        assert!(
+            builder
+                .options
+                .iter()
+                .any(|(k, v)| k == "wait_for_async_insert" && v == "0")
+        );
+    }
+
+    #[test]
+    fn test_builder_with_options() {
+        let opts = vec![
+            ("key1".to_string(), "value1".to_string()),
+            ("key2".to_string(), "value2".to_string()),
+        ];
+
+        let builder = Builder::new("http://localhost").with_options(opts);
+        assert_eq!(builder.options.len(), 2);
+    }
+
+    // ==================== parse_request_options tests ====================
+    #[test]
+    fn test_parse_request_options_valid() {
+        let result = parse_request_options("async_insert=1");
+        assert!(result.is_ok());
+        let (key, value) = result.unwrap();
+        assert_eq!(key, "async_insert");
+        assert_eq!(value, "1");
+    }
+
+    #[test]
+    fn test_parse_request_options_with_equals_in_value() {
+        let result = parse_request_options("key=value=with=equals");
+        assert!(result.is_ok());
+        let (key, value) = result.unwrap();
+        assert_eq!(key, "key");
+        assert_eq!(value, "value=with=equals");
+    }
+
+    #[test]
+    fn test_parse_request_options_no_equals() {
+        let result = parse_request_options("invalid");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_request_options_empty_key() {
+        let result = parse_request_options("=value");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_request_options_empty_value() {
+        let result = parse_request_options("key=");
+        assert!(result.is_err());
+    }
+}

@@ -74,7 +74,7 @@ macro_rules! require_clickhouse {
     () => {
         match build_backup_client() {
             Some(client) => client,
-            None => {
+            _ => {
                 eprintln!("Skipping test: TEST_CLICKHOUSE_URL not set");
                 return;
             }
@@ -87,7 +87,7 @@ macro_rules! require_s3 {
     ($prefix:expr) => {
         match build_s3_store($prefix) {
             Some(store) => store,
-            None => {
+            _ => {
                 eprintln!("Skipping test: TEST_S3_URL not set");
                 return;
             }

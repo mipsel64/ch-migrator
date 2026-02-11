@@ -70,7 +70,7 @@ macro_rules! require_clickhouse {
     () => {
         match build_clickhouse_client() {
             Some(client) => client,
-            None => {
+            _ => {
                 eprintln!("Skipping test: TEST_CLICKHOUSE_URL not set");
                 return;
             }

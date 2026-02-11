@@ -41,7 +41,9 @@ pub struct Command {
 
 #[derive(clap::Parser)]
 enum SubCommands {
+    /// List all databases in the ClickHouse server
     ListDatabases,
+    /// List all tables in a specified database
     ListTables {
         /// Database name to list tables from
         #[clap(long, short = 'd')]

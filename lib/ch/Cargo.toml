@@ -1,0 +1,25 @@
+[package]
+name = "ch"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+repository.workspace = true
+exclude.workspace = true
+
+[features]
+default = ["rustls-tls"]
+rustls-tls = ["clickhouse/rustls-tls-ring", "clickhouse/rustls-tls-webpki-roots"]
+native-tls = ["clickhouse/native-tls"]
+clap = ["dep:clap"]
+serde = ["dep:serde"]
+testing = ["clickhouse/test-util"]
+
+[dependencies]
+async-trait = { workspace = true }
+clickhouse = { workspace = true, features = ["chrono", "inserter"] }
+serde = { workspace = true, optional = true, features = ["derive"] }
+clap = { workspace = true, optional = true }
+thiserror = { workspace = true }

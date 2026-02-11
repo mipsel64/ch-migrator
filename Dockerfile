@@ -63,7 +63,7 @@ RUN --mount=type=cache,id=cargo-registry,target=$CARGO_HOME/registry,sharing=loc
   --mount=type=cache,id=cargo-git,target=$CARGO_HOME/git,sharing=locked \
   cargo build --bin chutils --target $(cat rust_target.txt) --release && \
   mkdir -p /tmp/out && \
-  cp target/$(cat rust_target.txt)/release/cli /tmp/out/ch-migrator
+  cp target/$(cat rust_target.txt)/release/chutils /tmp/out/chutils
 
 FROM --platform=${BUILDPLATFORM} alpine:3.22 AS certs
 RUN apk --update add ca-certificates
@@ -72,10 +72,10 @@ FROM gcr.io/distroless/cc-debian12
 
 WORKDIR /
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder /tmp/out/ch-migrator /usr/bin/ch-migrator
+COPY --from=builder /tmp/out/chutils /usr/bin/chutils
 
-LABEL org.opencontainers.image.source="https://github.com/mipsel64/ch-migrator"
+LABEL org.opencontainers.image.source="https://github.com/mipsel64/chutils"
 LABEL org.opencontainers.image.description="Clickhouse Migration CLI"
 LABEL org.opencontainers.image.licenses="MIT"
 
-ENTRYPOINT ["ch-migrator"]
+ENTRYPOINT ["chutils"]

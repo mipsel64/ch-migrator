@@ -1,5 +1,5 @@
 [package]
-name = "migration"
+name = "backup"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -30,3 +30,5 @@ serde_repr = { workspace = true }
 tempfile = "3"
 ch = { workspace = true, features = ["testing"] }
 serial_test = { workspace = true }
+tokio = { workspace = true }
+clickhouse = { workspace = true }

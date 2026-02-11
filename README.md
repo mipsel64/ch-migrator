@@ -1,12 +1,14 @@
-# ch-migrator
+# chutils
 
-A CLI tool and Rust library for managing ClickHouse database migrations.
+A CLI tool and Rust library for managing ClickHouse databases -- migrations, backups, restores, and cluster inspection.
 
 ## Features
 
-- **Simple & Reversible Migrations**: Support for one-way (simple) and two-way (up/down) migrations
-- **Dry Run**: Preview migrations before applying them
-- **Version Targeting**: Migrate up or down to a specific version
+- **Migrations**: Simple (irreversible) and reversible (up/down) migrations with dry-run and version targeting
+- **Backup to S3**: Back up entire databases or specific tables to S3-compatible storage
+- **Restore from S3**: Restore databases from S3 backups with structure-only or data-only options
+- **Backup Status**: Monitor backup/restore operation progress
+- **Cluster Inspection**: List databases and tables on a ClickHouse server
 - **Cross-Platform**: Binaries available for Linux and macOS (amd64/arm64)
 - **Docker Support**: Multi-arch container images (linux/amd64, linux/arm64)
 - **Library Usage**: Use as a Rust library in your own applications
@@ -15,38 +17,39 @@ A CLI tool and Rust library for managing ClickHouse database migrations.
 
 ### Binary
 
-Download the latest release from [GitHub Releases](https://github.com/mipsel64/ch-migrator/releases):
+Download the latest release from [GitHub Releases](https://github.com/mipsel64/chutils/releases):
 
 ```bash
 # Linux (amd64)
-curl -LO https://github.com/mipsel64/ch-migrator/releases/latest/download/ch-migrator-linux-amd64
-chmod +x ch-migrator-linux-amd64
-sudo mv ch-migrator-linux-amd64 /usr/local/bin/ch-migrator
+curl -LO https://github.com/mipsel64/chutils/releases/latest/download/chutils-linux-amd64
+chmod +x chutils-linux-amd64
+sudo mv chutils-linux-amd64 /usr/local/bin/chutils
 
 # Linux (arm64)
-curl -LO https://github.com/mipsel64/ch-migrator/releases/latest/download/ch-migrator-linux-arm64
-chmod +x ch-migrator-linux-arm64
-sudo mv ch-migrator-linux-arm64 /usr/local/bin/ch-migrator
+curl -LO https://github.com/mipsel64/chutils/releases/latest/download/chutils-linux-arm64
+chmod +x chutils-linux-arm64
+sudo mv chutils-linux-arm64 /usr/local/bin/chutils
 
 # macOS (Apple Silicon)
-curl -LO https://github.com/mipsel64/ch-migrator/releases/latest/download/ch-migrator-darwin-arm64
-chmod +x ch-migrator-darwin-arm64
-sudo mv ch-migrator-darwin-arm64 /usr/local/bin/ch-migrator
+curl -LO https://github.com/mipsel64/chutils/releases/latest/download/chutils-darwin-arm64
+chmod +x chutils-darwin-arm64
+sudo mv chutils-darwin-arm64 /usr/local/bin/chutils
 
 # macOS (Intel)
-curl -LO https://github.com/mipsel64/ch-migrator/releases/latest/download/ch-migrator-darwin-amd64
-chmod +x ch-migrator-darwin-amd64
-sudo mv ch-migrator-darwin-amd64 /usr/local/bin/ch-migrator
+curl -LO https://github.com/mipsel64/chutils/releases/latest/download/chutils-darwin-amd64
+chmod +x chutils-darwin-amd64
+sudo mv chutils-darwin-amd64 /usr/local/bin/chutils
 ```
 
 ### Docker
 
 ```bash
-docker pull ghcr.io/mipsel64/ch-migrator:latest
+docker pull ghcr.io/mipsel64/chutils:latest
 
-# Run with mounted migrations directory
+# Run migrations with mounted migrations directory
 docker run --rm -v $(pwd)/migrations:/migrations \
-  ghcr.io/mipsel64/ch-migrator:latest \
+  ghcr.io/mipsel64/chutils:latest \
+  migrate \
   --clickhouse-url http://host.docker.internal:8123 \
   --source /migrations \
   up
@@ -55,10 +58,12 @@ docker run --rm -v $(pwd)/migrations:/migrations \
 ### Cargo (from source)
 
 ```bash
-cargo install --git https://github.com/mipsel64/ch-migrator --bin cli
+cargo install --git https://github.com/mipsel64/chutils --bin chutils
 ```
 
 ## Quick Start
+
+### Migrations
 
 ```bash
 # Set connection details via environment variables
@@ -67,113 +72,314 @@ export CLICKHOUSE_USER=admin
 export CLICKHOUSE_PASSWORD=secret
 
 # Create your first migration
-ch-migrator add create_users_table --reversible
+chutils migrate add create_users_table --reversible
 
 # Edit the generated files
 # migrations/0001_create_users_table.up.sql
 # migrations/0001_create_users_table.down.sql
 
 # Check migration status
-ch-migrator info
+chutils migrate info
 
 # Apply pending migrations
-ch-migrator up
+chutils migrate up
 
 # Revert the latest migration
-ch-migrator down
+chutils migrate down
+```
+
+### Backup & Restore
+
+```bash
+# Back up a database to S3
+chutils backup \
+  --clickhouse-url http://localhost:8123 \
+  --db mydb \
+  --s3-url s3://my-bucket/backups/ \
+  --s3-access-key AKIAIOSFODNN7EXAMPLE \
+  --s3-secret-key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+  --wait
+
+# Restore a database from S3
+chutils restore \
+  --clickhouse-url http://localhost:8123 \
+  --src-db mydb \
+  --s3-url s3://my-bucket/backups/ \
+  --s3-access-key AKIAIOSFODNN7EXAMPLE \
+  --s3-secret-key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+  --wait
+
+# Check backup status
+chutils status \
+  --clickhouse-url http://localhost:8123 \
+  --backup-ids backup_id_1,backup_id_2
+```
+
+### Cluster Inspection
+
+```bash
+# List all databases
+chutils cluster --clickhouse-url http://localhost:8123 list-databases
+
+# List tables in a database
+chutils cluster --clickhouse-url http://localhost:8123 list-tables --database mydb
 ```
 
 ## CLI Reference
 
-### Global Options
+```
+Usage: chutils <COMMAND>
 
-| Flag | Environment Variable | Description | Default |
-|------|---------------------|-------------|---------|
-| `--clickhouse-url` | `CLICKHOUSE_URL` | ClickHouse server URL | Required |
-| `--clickhouse-user` | `CLICKHOUSE_USER` | Username for authentication | None |
-| `--clickhouse-password` | `CLICKHOUSE_PASSWORD` | Password for authentication | None |
-| `--clickhouse-db` | `CLICKHOUSE_DB` | Database name | None |
-| `--clickhouse-option` | `CLICKHOUSE_OPTIONS` | Additional options (space-delimited key=value) | None |
-| `--source` | `MIGRATION_SOURCE` | Path to migrations directory | `migrations/` |
+Commands:
+  migrate  Run database migrations
+  backup   Backup the database
+  restore  Restore the database from a backup
+  status   Show backup status
+  cluster  Manage database cluster
+```
 
-### Commands
+---
 
-#### `add <name>` - Create a new migration
+### `chutils migrate` - Run database migrations
+
+Shared options for all `migrate` subcommands:
+
+| Flag                    | Short | Environment Variable | Description                                    | Default       |
+| ----------------------- | ----- | -------------------- | ---------------------------------------------- | ------------- |
+| `--clickhouse-url`      | `-c`  | `CLICKHOUSE_URL`     | ClickHouse server URL                          | (empty)       |
+| `--clickhouse-user`     | `-u`  | `CLICKHOUSE_USER`    | Username for authentication                    | None          |
+| `--clickhouse-password` | `-p`  | `CLICKHOUSE_PASSWORD`| Password for authentication                    | None          |
+| `--clickhouse-db`       | `-d`  | `CLICKHOUSE_DB`      | Database name                                  | None          |
+| `--clickhouse-option`   | `-o`  | `CLICKHOUSE_OPTIONS` | Additional options (space-delimited key=value)  | None          |
+| `--source`              | `-s`  | `MIGRATION_SOURCE`   | Path to migrations directory                   | `migrations/` |
+
+#### `migrate add <name>` - Create a new migration
 
 ```bash
 # Create a simple (irreversible) migration
-ch-migrator add create_logs --simple
+chutils migrate add create_logs --simple
 
 # Create a reversible migration with up/down scripts
-ch-migrator add create_users --reversible
+chutils migrate add create_users --reversible
 
 # Auto-detect mode from existing migrations
-ch-migrator add add_email_column
+chutils migrate add add_email_column
 ```
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--reversible` | `-r` | Create reversible migration (up/down files) |
-| `--simple` | `-s` | Create simple migration (single file) |
+| Flag           | Short | Description                                 |
+| -------------- | ----- | ------------------------------------------- |
+| `--reversible` | `-r`  | Create reversible migration (up/down files) |
+| `--simple`     | `-s`  | Create simple migration (single file)       |
 
-#### `info` - Display migration status
+#### `migrate info` - Display migration status
 
 ```bash
-ch-migrator info
+chutils migrate info
 ```
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--ignore-missing` | `-I` | Skip validation of missing local files |
+| Flag               | Short | Description                            |
+| ------------------ | ----- | -------------------------------------- |
+| `--ignore-missing` | `-I`  | Skip validation of missing local files |
 
-#### `up` - Apply pending migrations
+#### `migrate up` - Apply pending migrations
 
 ```bash
 # Apply all pending migrations
-ch-migrator up
+chutils migrate up
 
 # Preview without applying
-ch-migrator up --dry-run
+chutils migrate up --dry-run
 
 # Apply up to version 5 (inclusive)
-ch-migrator up --target-version 5
+chutils migrate up --target-version 5
 ```
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--dry-run` | `-d` | Preview without applying |
-| `--ignore-missing` | `-I` | Skip validation of missing local files |
-| `--target-version` | `-t` | Migrate up to specific version (inclusive) |
+| Flag               | Short | Description                                |
+| ------------------ | ----- | ------------------------------------------ |
+| `--dry-run`        |       | Preview without applying                   |
+| `--ignore-missing` | `-I`  | Skip validation of missing local files     |
+| `--target-version` | `-t`  | Migrate up to specific version (inclusive)  |
 
-#### `down` - Revert applied migrations
+#### `migrate down` - Revert applied migrations
 
 ```bash
 # Revert the latest migration
-ch-migrator down
+chutils migrate down
 
 # Preview without reverting
-ch-migrator down --dry-run
+chutils migrate down --dry-run
 
 # Revert all migrations after version 3 (exclusive)
-ch-migrator down --target-version 3
+chutils migrate down --target-version 3
 ```
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--dry-run` | `-d` | Preview without reverting |
-| `--ignore-missing` | `-I` | Skip validation of missing local files |
-| `--target-version` | `-t` | Revert down to specific version (exclusive) |
+| Flag               | Short | Description                                 |
+| ------------------ | ----- | ------------------------------------------- |
+| `--dry-run`        |       | Preview without reverting                   |
+| `--ignore-missing` | `-I`  | Skip validation of missing local files      |
+| `--target-version` | `-t`  | Revert down to specific version (exclusive) |
+
+---
+
+### `chutils backup` - Backup the database
+
+Back up a ClickHouse database (or specific tables) to S3-compatible storage.
+
+```bash
+chutils backup \
+  --clickhouse-url http://localhost:8123 \
+  --db mydb \
+  --s3-url s3://my-bucket/backups/ \
+  --s3-access-key AKIAEXAMPLE \
+  --s3-secret-key wJalrXUtnFEMIEXAMPLEKEY \
+  --wait
+```
+
+| Flag                    | Short | Environment Variable | Description                                                        | Required |
+| ----------------------- | ----- | -------------------- | ------------------------------------------------------------------ | -------- |
+| `--clickhouse-url`      | `-c`  | `CLICKHOUSE_URL`     | ClickHouse server URL                                              | Yes      |
+| `--clickhouse-user`     | `-u`  | `CLICKHOUSE_USER`    | Username for authentication                                        | No       |
+| `--clickhouse-password` | `-p`  | `CLICKHOUSE_PASSWORD`| Password for authentication                                        | No       |
+| `--clickhouse-option`   | `-o`  | `CLICKHOUSE_OPTIONS` | Additional options (space-delimited key=value)                      | No       |
+| `--db`                  | `-d`  | `BACKUP_DB`          | Database to back up                                                | Yes      |
+| `--table`               | `-t`  | `BACKUP_TABLES`      | Comma-separated list of tables (default: all tables)                | No       |
+| `--backup-option`       | `-O`  | `BACKUP_OPTIONS`     | Comma-separated backup options (e.g., `s3_max_connections=1000`)    | No       |
+| `--wait`                | `-W`  | `BACKUP_WAIT`        | Wait for the backup to complete before returning                    | No       |
+| `--s3-url`              |       | `S3_URL`             | S3 URL for storing backups                                          | Yes      |
+| `--s3-access-key`       |       | `S3_ACCESS_KEY`      | S3 access key                                                      | Yes      |
+| `--s3-secret-key`       |       | `S3_SECRET_KEY`      | S3 secret key                                                      | Yes      |
+| `--s3-prefix`           |       | `S3_PREFIX`          | Optional S3 prefix for backup files                                | No       |
+
+---
+
+### `chutils restore` - Restore from a backup
+
+Restore a ClickHouse database from an S3 backup.
+
+```bash
+# Restore to the same database name
+chutils restore \
+  --clickhouse-url http://localhost:8123 \
+  --src-db mydb \
+  --s3-url s3://my-bucket/backups/ \
+  --s3-access-key AKIAEXAMPLE \
+  --s3-secret-key wJalrXUtnFEMIEXAMPLEKEY \
+  --wait
+
+# Restore to a different database
+chutils restore \
+  --clickhouse-url http://localhost:8123 \
+  --src-db mydb \
+  --dst-db mydb_restored \
+  --s3-url s3://my-bucket/backups/ \
+  --s3-access-key AKIAEXAMPLE \
+  --s3-secret-key wJalrXUtnFEMIEXAMPLEKEY \
+  --wait
+
+# Restore structure only (no data)
+chutils restore \
+  --clickhouse-url http://localhost:8123 \
+  --src-db mydb \
+  --structure-only \
+  --s3-url s3://my-bucket/backups/ \
+  --s3-access-key AKIAEXAMPLE \
+  --s3-secret-key wJalrXUtnFEMIEXAMPLEKEY
+```
+
+| Flag                    | Short | Environment Variable   | Description                                                            | Required |
+| ----------------------- | ----- | ---------------------- | ---------------------------------------------------------------------- | -------- |
+| `--clickhouse-url`      | `-c`  | `CLICKHOUSE_URL`       | ClickHouse server URL                                                  | Yes      |
+| `--clickhouse-user`     | `-u`  | `CLICKHOUSE_USER`      | Username for authentication                                            | No       |
+| `--clickhouse-password` | `-p`  | `CLICKHOUSE_PASSWORD`  | Password for authentication                                            | No       |
+| `--clickhouse-option`   | `-o`  | `CLICKHOUSE_OPTIONS`   | Additional options (space-delimited key=value)                          | No       |
+| `--src-db`              | `-s`  | `RESTORE_SRC_DB`       | Source database name to restore from                                    | Yes      |
+| `--dst-db`              | `-d`  | `RESTORE_DST_DB`       | Destination database name (defaults to source name)                     | No       |
+| `--table`               | `-t`  | `RESTORE_TABLE`        | Comma-separated list of tables (default: all tables)                    | No       |
+| `--restore-option`      | `-O`  | `RESTORE_OPTIONS`      | Comma-separated restore options (e.g., `s3_max_connections=1000`)       | No       |
+| `--structure-only`      | `-S`  | `RESTORE_STRUCTURE_ONLY`| Restore table structure only (mutually exclusive with `--data-only`)   | No       |
+| `--data-only`           | `-D`  | `RESTORE_DATA_ONLY`    | Restore data only (mutually exclusive with `--structure-only`)          | No       |
+| `--wait`                | `-W`  | `RESTORE_WAIT`         | Wait for the restore to complete before returning                       | No       |
+| `--s3-url`              |       | `S3_URL`               | S3 URL for the backup location                                          | Yes      |
+| `--s3-access-key`       |       | `S3_ACCESS_KEY`        | S3 access key                                                          | Yes      |
+| `--s3-secret-key`       |       | `S3_SECRET_KEY`        | S3 secret key                                                          | Yes      |
+| `--s3-prefix`           |       | `S3_PREFIX`            | Optional S3 prefix for backup files                                    | No       |
+
+---
+
+### `chutils status` - Show backup status
+
+Check the status of backup or restore operations.
+
+```bash
+# Check status of specific backups
+chutils status \
+  --clickhouse-url http://localhost:8123 \
+  --backup-ids backup_id_1,backup_id_2
+
+# Wait until all backups complete
+chutils status \
+  --clickhouse-url http://localhost:8123 \
+  --backup-ids backup_id_1 \
+  --wait
+
+# Filter backups from the last 10 minutes
+chutils status \
+  --clickhouse-url http://localhost:8123 \
+  --backup-ids backup_id_1 \
+  --since 10m
+```
+
+| Flag                    | Short | Environment Variable | Description                                                   | Required |
+| ----------------------- | ----- | -------------------- | ------------------------------------------------------------- | -------- |
+| `--clickhouse-url`      | `-c`  | `CLICKHOUSE_URL`     | ClickHouse server URL                                         | Yes      |
+| `--clickhouse-user`     | `-u`  | `CLICKHOUSE_USER`    | Username for authentication                                   | No       |
+| `--clickhouse-password` | `-p`  | `CLICKHOUSE_PASSWORD`| Password for authentication                                   | No       |
+| `--clickhouse-option`   | `-o`  | `CLICKHOUSE_OPTIONS` | Additional options (space-delimited key=value)                 | No       |
+| `--backup-ids`          | `-b`  |                      | Comma-separated list of backup IDs to check                   | Yes      |
+| `--wait`                | `-W`  |                      | Wait until all backups are complete                            | No       |
+| `--since`               | `-s`  |                      | Filter backups since duration (e.g., `10m`, `1h`)              | No (default: `24h`) |
+
+---
+
+### `chutils cluster` - Manage database cluster
+
+Shared options for all `cluster` subcommands:
+
+| Flag                    | Short | Environment Variable | Description                                    | Default |
+| ----------------------- | ----- | -------------------- | ---------------------------------------------- | ------- |
+| `--clickhouse-url`      | `-c`  | `CLICKHOUSE_URL`     | ClickHouse server URL                          | (empty) |
+| `--clickhouse-user`     | `-u`  | `CLICKHOUSE_USER`    | Username for authentication                    | None    |
+| `--clickhouse-password` | `-p`  | `CLICKHOUSE_PASSWORD`| Password for authentication                    | None    |
+| `--clickhouse-option`   | `-o`  | `CLICKHOUSE_OPTIONS` | Additional options (space-delimited key=value)  | None    |
+
+#### `cluster list-databases` - List all databases
+
+```bash
+chutils cluster --clickhouse-url http://localhost:8123 list-databases
+```
+
+#### `cluster list-tables` - List all tables in a database
+
+```bash
+chutils cluster --clickhouse-url http://localhost:8123 list-tables --database mydb
+```
+
+| Flag         | Short | Description                    | Required |
+| ------------ | ----- | ------------------------------ | -------- |
+| `--database` | `-d`  | Database name to list tables from | Yes      |
 
 ## Migration File Format
 
 ### Naming Convention
 
 **Simple migrations** (irreversible):
+
 ```
 {NNNN}_{name}.sql
 ```
 
 **Reversible migrations**:
+
 ```
 {NNNN}_{name}.up.sql    # Applied when running `up`
 {NNNN}_{name}.down.sql  # Applied when running `down`
@@ -214,26 +420,35 @@ DROP TABLE IF EXISTS users;
 
 ## Library Usage
 
-Add to your `Cargo.toml`:
+The workspace provides several crates that can be used independently:
 
 ```toml
 [dependencies]
-migration = { git = "https://github.com/mipsel64/ch-migrator", package = "migration" }
+# Migration library
+migration = { git = "https://github.com/mipsel64/chutils", package = "migration" }
+
+# Backup/restore library
+backup = { git = "https://github.com/mipsel64/chutils", package = "backup" }
+
+# Shared ClickHouse client library
+ch = { git = "https://github.com/mipsel64/chutils", package = "ch" }
 ```
 
-### Example
+### Migration Example
 
 ```rust
-use migration::{Builder, Migration, MigrationFileMode};
+use migration::{Migration, MigrationFileMode};
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    // Build a migrator
-    let migrator = Builder::new("http://localhost:8123")
-        .with_username(Some("admin"))
-        .with_password(Some("secret"))
-        .with_database(Some("mydb"))
-        .to_migrator()?;
+    // Build a ClickHouse client
+    let client = ch::Builder::new("http://localhost:8123")
+        .with_username(Some("admin".into()))
+        .with_password(Some("secret".into()))
+        .with_database(Some("mydb".into()))
+        .to_client()?;
+
+    let migrator = migration::Migrator::from_client(client);
 
     // Ensure migrations table exists
     migrator.ensure_migrations_table().await?;
@@ -258,17 +473,17 @@ async fn main() -> eyre::Result<()> {
 
 ### Feature Flags
 
-| Feature | Description | Default |
-|---------|-------------|---------|
-| `rustls-tls` | Use rustls for TLS | Yes |
-| `rustls-tls-ring` | Use rustls with ring crypto backend | No |
-| `native-tls` | Use native TLS implementation | No |
+| Feature           | Description                         | Default |
+| ----------------- | ----------------------------------- | ------- |
+| `rustls-tls`      | Use rustls for TLS                  | Yes     |
+| `rustls-tls-ring` | Use rustls with ring crypto backend | No      |
+| `native-tls`      | Use native TLS implementation       | No      |
 
 ## How It Works
 
 ### Migrations Table
 
-ch-migrator tracks applied migrations in a `_ch_migrations` table:
+chutils tracks applied migrations in a `_ch_migrations` table:
 
 ```sql
 CREATE TABLE IF NOT EXISTS _ch_migrations (
@@ -298,30 +513,34 @@ ORDER BY (applied_at, version)
 ## Project Structure
 
 ```
-ch-migrator/
-├── bin/cli/              # CLI binary
-│   └── src/main.rs       # Entry point, argument parsing
-├── lib/migration/        # Core library
+chutils/
+├── bin/chutils/          # CLI binary
 │   └── src/
-│       ├── lib.rs        # Migration trait, Migrator, Builder
-│       ├── fs.rs         # File system operations
-│       └── error.rs      # Error types
+│       ├── main.rs       # Entry point, argument parsing
+│       ├── migration.rs  # Migrate subcommand
+│       ├── backup.rs     # Backup subcommand
+│       ├── restore.rs    # Restore subcommand
+│       ├── status.rs     # Status subcommand
+│       └── cluster.rs    # Cluster subcommand
+├── lib/
+│   ├── migration/        # Migration library
+│   │   └── src/
+│   │       ├── lib.rs    # Migration trait, Migrator
+│   │       ├── fs.rs     # File system operations
+│   │       └── error.rs  # Error types
+│   ├── backup/           # Backup/restore library
+│   │   └── src/
+│   │       ├── lib.rs    # Backup and restore logic
+│   │       └── error.rs  # Error types
+│   └── ch/               # Shared ClickHouse client library
+│       └── src/
+│           ├── lib.rs    # Client builder, helpers
+│           └── error.rs  # Error types
 ├── Dockerfile            # Multi-arch container build
 └── .github/workflows/
     ├── ci.yaml           # CI pipeline (lint, test, build)
     └── release.yaml      # Release pipeline (binaries, Docker, GitHub release)
 ```
-
-### Key Types
-
-| Type | Description |
-|------|-------------|
-| `Builder` | Configures and creates a `Migrator` instance |
-| `Migrator` | Main migration executor, wraps ClickHouse client |
-| `Migration` | Trait defining migration operations |
-| `MigrationInfo` | Migration metadata and status |
-| `MigrationFileMode` | Enum: `Simple` or `Reversible` |
-| `MigrationStatus` | Enum: `Pending` or `Applied` |
 
 ---
 

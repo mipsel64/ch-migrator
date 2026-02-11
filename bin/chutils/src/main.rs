@@ -1,4 +1,5 @@
 mod backup;
+mod cluster;
 mod migration;
 mod restore;
 mod status;
@@ -15,6 +16,8 @@ pub enum Command {
     Restore(restore::Command),
     /// Show backup status
     Status(status::Command),
+    /// Manage database cluster
+    Cluster(cluster::Command),
 }
 
 async fn run() -> eyre::Result<()> {
@@ -28,6 +31,7 @@ async fn run() -> eyre::Result<()> {
         Command::Backup(cmd) => cmd.execute().await?,
         Command::Restore(cmd) => cmd.execute().await?,
         Command::Status(cmd) => cmd.execute().await?,
+        Command::Cluster(cmd) => cmd.execute().await?,
     }
     Ok(())
 }
